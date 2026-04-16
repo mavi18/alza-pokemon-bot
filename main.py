@@ -54,27 +54,29 @@ def send_notification(message):
         logger.error(f"Failed to send notification: {e}")
 
 def check_alza(seen_products):
-    logger.info("Starting SeleniumBase UC Mode...")
+    logger.info("Starting SeleniumBase UC Mode with GUI Click support...")
     
-    # We use xvfb=True for GitHub Actions to run in a virtual headed mode
-    with SB(uc=True, xvfb=True, headless=False) as sb:
+    # Using specific metrics for Xvfb to ensure the GUI click is accurate
+    with SB(uc=True, xvfb=True, headless=False, ad_block=True, window_size="1920,1080") as sb:
         logger.info(f"Navigating to {ALZA_URL}...")
         
         try:
             # Open with reconnect to bypass initial JS challenge
-            sb.uc_open_with_reconnect(ALZA_URL, reconnect_time=5)
+            sb.uc_open_with_reconnect(ALZA_URL, reconnect_time=6)
             
-            # Check for Cloudflare challenge and try to click it if visible
-            sb.uc_gui_click_captcha()
-            
-            # Wait for products to load
-            logger.info("Waiting for products...")
-            time.sleep(10) # Initial wait for JS
-            
-            if not sb.is_element_visible(".browsingitem"):
-                logger.warning("Products not visible. Trying one more reconnect...")
-                sb.uc_open_with_reconnect(ALZA_URL, reconnect_time=10)
+            # Attempt to click the Cloudflare "Verify you are human" button via GUI
+            logger.info("Attempting to click Cloudflare captcha (GUI Mode)...")
+            try:
                 sb.uc_gui_click_captcha()
+                logger.info("GUI click performed. Waiting for redirect...")
+                time.sleep(10)
+            except Exception as e:
+                logger.info(f"GUI click not needed or failed: {e}")
+
+            # Wait for products to load
+            logger.info("Checking for products...")
+            if not sb.is_element_visible(".browsingitem"):
+                logger.info("Products not visible. Taking one more look...")
                 time.sleep(10)
 
             if not sb.is_element_visible(".browsingitem"):
@@ -93,14 +95,14 @@ def check_alza(seen_products):
                     
                     title = title_elem.text.strip()
                     href = title_elem.get_attribute("href")
-                    url = href # Selenium returns full URL
+                    url = href
                     price = price_elem.text.strip() if price_elem else "N/A"
                     
                     product_id = f"{title}_{price}"
                     if product_id not in seen_products:
                         new_products.append(f"📦 {title}\n💰 {price}\n🔗 {url}")
                         seen_products.add(product_id)
-                except Exception as e:
+                except Exception:
                     continue
 
             if new_products:
@@ -120,7 +122,7 @@ def check_alza(seen_products):
             sb.save_screenshot("error.png")
 
 def main():
-    logger.info("Starting Alza Pokémon Bot (SeleniumBase Run)...")
+    logger.info("Starting Alza Pokémon Bot (SeleniumBase GUI Run)...")
     seen_products = load_seen_products()
     try:
         check_alza(seen_products)
