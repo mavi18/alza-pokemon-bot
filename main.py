@@ -57,6 +57,7 @@ async def check_alza(seen_products):
     logger.info("Starting nodriver browser...")
     # nodriver starts a real browser and connects via CDP
     browser = await uc.start(
+        no_sandbox=True,
         browser_args=["--no-sandbox", "--disable-setuid-sandbox"]
     )
     
