@@ -1,10 +1,10 @@
-import asyncio
 import json
 import logging
 import os
-import nodriver as uc
+import time
 import requests
 from dotenv import load_dotenv
+from seleniumbase import SB
 
 # Setup logging
 logging.basicConfig(
@@ -53,73 +53,55 @@ def send_notification(message):
     except Exception as e:
         logger.error(f"Failed to send notification: {e}")
 
-async def check_alza(seen_products):
-    logger.info("Starting nodriver browser...")
+def check_alza(seen_products):
+    logger.info("Starting SeleniumBase UC Mode...")
     
-    # Path for Google Chrome on Ubuntu
-    chrome_path = "/usr/bin/google-chrome"
-    if not os.path.exists(chrome_path):
-        chrome_path = None # Fallback to default
-        
-    # nodriver starts a real browser and connects via CDP
-    browser = await uc.start(
-        browser_executable_path=chrome_path,
-        no_sandbox=True,
-        browser_args=["--no-sandbox", "--disable-setuid-sandbox", "--single-process"]
-    )
-    
-    try:
+    # We use xvfb=True for GitHub Actions to run in a virtual headed mode
+    with SB(uc=True, xvfb=True, headless=False) as sb:
         logger.info(f"Navigating to {ALZA_URL}...")
-        page = await browser.get(ALZA_URL)
         
-        # nodriver handles Turnstile/Managed Challenges naturally
-        # We wait for the products to appear
-        logger.info("Waiting for products to load (max 60s)...")
-        
-        # wait_for can accept a selector or a timeout
         try:
-            # We give it plenty of time for Cloudflare to resolve
-            await asyncio.sleep(15) 
+            # Open with reconnect to bypass initial JS challenge
+            sb.uc_open_with_reconnect(ALZA_URL, reconnect_time=5)
             
-            # Check for challenge page manually just in case
-            content = await page.get_content()
-            if "Verify you are human" in content or "PÍP PÍP TUTÚT" in content:
-                logger.warning("Cloudflare challenge visible. Waiting another 20s...")
-                await asyncio.sleep(20)
-                await page.save_screenshot("error.png")
-
-            # Try to find products
-            items = await page.select_all(".browsingitem")
+            # Check for Cloudflare challenge and try to click it if visible
+            sb.uc_gui_click_captcha()
             
-            if not items:
-                logger.warning("No products found yet. Trying one last wait...")
-                await asyncio.sleep(10)
-                items = await page.select_all(".browsingitem")
+            # Wait for products to load
+            logger.info("Waiting for products...")
+            time.sleep(10) # Initial wait for JS
+            
+            if not sb.is_element_visible(".browsingitem"):
+                logger.warning("Products not visible. Trying one more reconnect...")
+                sb.uc_open_with_reconnect(ALZA_URL, reconnect_time=10)
+                sb.uc_gui_click_captcha()
+                time.sleep(10)
 
-            if not items:
-                logger.error("Failed to find products. Possible block.")
-                await page.save_screenshot("error.png")
+            if not sb.is_element_visible(".browsingitem"):
+                logger.error("Failed to find products. Taking screenshot...")
+                sb.save_screenshot("error.png")
                 return
 
+            items = sb.find_elements(".browsingitem")
             logger.info(f"Found {len(items)} products.")
 
             new_products = []
             for item in items:
-                # In nodriver, item is an Element object
-                # We can use query_selector equivalents
-                title_elem = await item.select("a.browsingitem-title")
-                price_elem = await item.select(".price-box__price")
-                
-                if title_elem:
+                try:
+                    title_elem = item.find_element("css selector", "a.browsingitem-title")
+                    price_elem = item.find_element("css selector", ".price-box__price")
+                    
                     title = title_elem.text.strip()
-                    href = title_elem.attributes.get("href")
-                    url = "https://www.alza.sk" + href if href.startswith("/") else href
+                    href = title_elem.get_attribute("href")
+                    url = href # Selenium returns full URL
                     price = price_elem.text.strip() if price_elem else "N/A"
                     
                     product_id = f"{title}_{price}"
                     if product_id not in seen_products:
                         new_products.append(f"📦 {title}\n💰 {price}\n🔗 {url}")
                         seen_products.add(product_id)
+                except Exception as e:
+                    continue
 
             if new_products:
                 chunk_size = 5
@@ -131,23 +113,20 @@ async def check_alza(seen_products):
                 save_seen_products(seen_products)
                 logger.info(f"Notified about {len(new_products)} products.")
             else:
-                logger.info("No new available products found.")
+                logger.info("No new products found.")
 
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
-            await page.save_screenshot("error.png")
-            
-    finally:
-        await browser.stop()
+            sb.save_screenshot("error.png")
 
-async def main():
-    logger.info("Starting Alza Pokémon Bot (Nodriver Run)...")
+def main():
+    logger.info("Starting Alza Pokémon Bot (SeleniumBase Run)...")
     seen_products = load_seen_products()
     try:
-        await check_alza(seen_products)
+        check_alza(seen_products)
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
     logger.info("Run complete.")
 
 if __name__ == "__main__":
-    uc.loop().run_until_complete(main())
+    main()

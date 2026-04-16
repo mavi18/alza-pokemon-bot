@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Google Chrome and Xvfb
         run: |
@@ -33,7 +33,7 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           ALZA_URL: ${{ secrets.ALZA_URL }}
-        run: xvfb-run --auto-servernum python main.py
+        run: python main.py
 
       - name: Upload Debug Screenshot
         if: always()
