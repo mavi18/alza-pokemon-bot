@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "alza_pokemon_bot_97422555")
-ALZA_URL = os.getenv("ALZA_URL")
+# Base URL without the # filters to be less suspicious
+ALZA_URL = "https://www.alza.sk/hracky/pokemon-karty/18879069.htm"
 SEEN_FILE = "seen_products.json"
 
 def load_seen_products():
@@ -58,93 +59,70 @@ def send_notification(message):
         logger.error(f"Failed to send notification: {e}")
 
 async def check_alza(seen_products):
-    if not ALZA_URL:
-        logger.error("ALZA_URL is not set!")
-        return
-
     async with async_playwright() as p:
-        # Launch chromium with some additional args to look less like a bot
-        browser = await p.chromium.launch(headless=True, args=[
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox'
-        ])
+        # Switching to Firefox as it often has different fingerprinting results
+        logger.info("Launching Firefox...")
+        browser = await p.firefox.launch(headless=True)
         
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080},
-            device_scale_factor=1,
-            has_touch=False,
-            is_mobile=False
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+            viewport={'width': 1920, 'height': 1080}
         )
         
         page = await context.new_page()
         
-        # Apply more aggressive stealth
-        stealth = Stealth(
-            navigator_vendor_override='Google Inc.',
-            webgl_vendor_override='Intel Inc.',
-            webgl_renderer_override='Intel Iris OpenGL Engine',
-            navigator_user_agent_override='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            navigator_platform_override='Win32'
-        )
-        await stealth.apply_stealth_async(page)
-
-        logger.info(f"Navigating to Alza...")
+        # Note: playwright-stealth works best with Chromium, but we'll try a light version for Firefox
+        # or just rely on Firefox's native behavior.
+        
+        logger.info(f"Navigating to Alza: {ALZA_URL}")
         try:
-            # First attempt
-            await page.goto(ALZA_URL, wait_until="domcontentloaded", timeout=60000)
+            # Using a slower, more patient navigation
+            await page.goto(ALZA_URL, wait_until="domcontentloaded", timeout=90000)
             
-            # Check for Cloudflare Challenge
-            for attempt in range(3):
-                content = await page.content()
-                if "Verify you are human" in content or "cf-challenge" in content or "cf-wrapper" in content:
-                    logger.info(f"Cloudflare challenge detected. Waiting... (Attempt {attempt+1}/3)")
-                    # Move mouse randomly to look human
-                    await page.mouse.move(100, 100)
-                    await asyncio.sleep(1)
-                    await page.mouse.move(200, 300)
-                    await asyncio.sleep(15) # Wait for auto-solve
-                else:
-                    break
-
-            # Check if still on challenge page
-            if "Verify you are human" in await page.content():
-                logger.warning("Still blocked by Cloudflare after waiting. Taking screenshot...")
+            # Wait to see if we get challenged
+            await asyncio.sleep(15) 
+            
+            content = await page.content()
+            if "Verify you are human" in content or "PÍP PÍP TUTÚT" in content:
+                logger.warning("Cloudflare challenge detected. Trying to wait it out...")
+                await asyncio.sleep(20)
+                # Take a screenshot to see if it cleared
                 await page.screenshot(path="error.png")
-                await browser.close()
-                return
-
-            # Wait for products
-            logger.info("Waiting for products to load...")
-            await asyncio.sleep(5) 
-            
+                
+            # Wait for any grid items to appear
             try:
                 await page.wait_for_selector(".browsingitem", timeout=30000)
             except Exception:
-                logger.warning("Product grid not found. Page might be empty or blocked. Taking screenshot...")
+                logger.warning("Still no products found. Possible block. Check error.png")
                 await page.screenshot(path="error.png")
                 await browser.close()
                 return
 
             items = await page.query_selector_all(".browsingitem")
-            logger.info(f"Found {len(items)} products.")
+            logger.info(f"Found {len(items)} products in total. Filtering for available...")
 
             new_products = []
             for item in items:
-                title_elem = await item.query_selector("a.browsingitem-title")
-                price_elem = await item.query_selector(".price-box__price")
+                # Check for "Skladom" or "Kúpiť" button which indicates availability
+                # If the item is "Tešíme sa" (upcoming) or "Vypredané" (sold out), we skip it.
+                stock_elem = await item.query_selector(".browsingitem-stock, .btnk1")
+                stock_text = await stock_elem.inner_text() if stock_elem else ""
                 
-                if title_elem:
-                    title = (await title_elem.inner_text()).strip()
-                    href = await title_elem.get_attribute("href")
-                    url = "https://www.alza.sk" + href if href.startswith("/") else href
-                    price = (await price_elem.inner_text()).strip() if price_elem else "N/A"
+                # Alza labels available items as "Skladom" or has a buy button
+                if "Skladom" in stock_text or stock_elem:
+                    title_elem = await item.query_selector("a.browsingitem-title")
+                    price_elem = await item.query_selector(".price-box__price")
                     
-                    product_id = f"{title}_{price}"
-                    if product_id not in seen_products:
-                        new_products.append(f"📦 {title}\n💰 {price}\n🔗 {url}")
-                        seen_products.add(product_id)
+                    if title_elem:
+                        title = (await title_elem.inner_text()).strip()
+                        href = await title_elem.get_attribute("href")
+                        url = "https://www.alza.sk" + href if href.startswith("/") else href
+                        price = (await price_elem.inner_text()).strip() if price_elem else "N/A"
+                        
+                        product_id = f"{title}_{price}"
+                        if product_id not in seen_products:
+                            new_products.append(f"📦 {title}\n💰 {price}\n🔗 {url}")
+                            seen_products.add(product_id)
 
             if new_products:
                 chunk_size = 5
@@ -154,9 +132,9 @@ async def check_alza(seen_products):
                     send_notification(message)
                 
                 save_seen_products(seen_products)
-                logger.info(f"Notified about {len(new_products)} new products.")
+                logger.info(f"Notified about {len(new_products)} products.")
             else:
-                logger.info("No new products found.")
+                logger.info("No available or new products found.")
 
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
@@ -165,7 +143,7 @@ async def check_alza(seen_products):
         await browser.close()
 
 async def main():
-    logger.info("Starting Alza Pokémon Bot (Single Run)...")
+    logger.info("Starting Alza Pokémon Bot (Firefox Run)...")
     seen_products = load_seen_products()
     try:
         await check_alza(seen_products)
