@@ -55,10 +55,17 @@ def send_notification(message):
 
 async def check_alza(seen_products):
     logger.info("Starting nodriver browser...")
+    
+    # Path for Google Chrome on Ubuntu
+    chrome_path = "/usr/bin/google-chrome"
+    if not os.path.exists(chrome_path):
+        chrome_path = None # Fallback to default
+        
     # nodriver starts a real browser and connects via CDP
     browser = await uc.start(
+        browser_executable_path=chrome_path,
         no_sandbox=True,
-        browser_args=["--no-sandbox", "--disable-setuid-sandbox"]
+        browser_args=["--no-sandbox", "--disable-setuid-sandbox", "--single-process"]
     )
     
     try:
