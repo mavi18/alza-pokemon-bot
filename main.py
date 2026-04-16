@@ -85,12 +85,12 @@ async def check_alza(seen_products):
 
         logger.info(f"Checking Alza URL: {ALZA_URL}")
         try:
-            # Navigate to URL
-            await page.goto(ALZA_URL, wait_until="networkidle", timeout=60000)
+            # Navigate to URL - using domcontentloaded is more reliable for sites with heavy tracking
+            await page.goto(ALZA_URL, wait_until="domcontentloaded", timeout=90000)
             
             # Wait for the specific filtering to be reflected in the URL or page state
             # Alza often applies filters after load. We wait for the grid to stabilize.
-            await page.wait_for_timeout(5000) # Give JS a 5-second window to settle
+            await page.wait_for_timeout(10000) # Increased to 10 seconds for GitHub Actions latency
             
             # Wait for the product grid to be visible
             try:
