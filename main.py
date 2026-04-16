@@ -94,9 +94,10 @@ async def check_alza(seen_products):
             
             # Wait for the product grid to be visible
             try:
-                await page.wait_for_selector(".browsingitem", timeout=20000)
+                await page.wait_for_selector(".browsingitem", timeout=30000)
             except Exception:
-                logger.warning("Product selector '.browsingitem' not found within timeout. Page might be empty or blocked.")
+                logger.warning("Product selector '.browsingitem' not found within timeout. Page might be empty or blocked. Taking screenshot...")
+                await page.screenshot(path="error.png")
                 await browser.close()
                 return
 
