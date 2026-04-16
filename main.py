@@ -64,6 +64,10 @@ def send_notification(message):
 
 async def check_alza(seen_products):
     """Scrape Alza for products and notify if new ones are found."""
+    if not ALZA_URL:
+        logger.error("ALZA_URL is not set! Please add it to GitHub Secrets.")
+        return
+
     async with async_playwright() as p:
         # Launch chromium
         browser = await p.chromium.launch(headless=True)
