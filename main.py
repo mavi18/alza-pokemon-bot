@@ -82,11 +82,11 @@ async def check_alza(seen_products):
         
         # Apply more aggressive stealth
         stealth = Stealth(
-            vendor='Google Inc.',
-            renderer='Intel Iris OpenGL Engine',
-            nav_user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            nav_platform='Win32',
-            nav_vendor='Google Inc.'
+            navigator_vendor_override='Google Inc.',
+            webgl_vendor_override='Intel Inc.',
+            webgl_renderer_override='Intel Iris OpenGL Engine',
+            navigator_user_agent_override='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            navigator_platform_override='Win32'
         )
         await stealth.apply_stealth_async(page)
 
