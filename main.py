@@ -8,7 +8,7 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 
 # Setup logging
 logging.basicConfig(
@@ -74,21 +74,25 @@ async def check_alza(seen_products):
             viewport={'width': 1920, 'height': 1080}
         )
         page = await context.new_page()
-        await stealth_async(page)
+        
+        # Apply stealth
+        stealth = Stealth()
+        await stealth.apply_stealth_async(page)
 
         logger.info(f"Checking Alza URL: {ALZA_URL}")
         try:
             # Navigate to URL
             await page.goto(ALZA_URL, wait_until="networkidle", timeout=60000)
             
-            # Alza often uses client-side rendering for filters
+            # Wait for the specific filtering to be reflected in the URL or page state
+            # Alza often applies filters after load. We wait for the grid to stabilize.
+            await page.wait_for_timeout(5000) # Give JS a 5-second window to settle
+            
             # Wait for the product grid to be visible
             try:
                 await page.wait_for_selector(".browsingitem", timeout=20000)
             except Exception:
                 logger.warning("Product selector '.browsingitem' not found within timeout. Page might be empty or blocked.")
-                # Take a screenshot for debugging if it fails (optional)
-                # await page.screenshot(path="error.png")
                 await browser.close()
                 return
 
@@ -115,8 +119,7 @@ async def check_alza(seen_products):
                         seen_products.add(product_id)
 
             if new_products:
-                # Send notifications in chunks if there are many products
-                # (ntfy has limits on message size)
+                # Send notifications in chunks
                 chunk_size = 5
                 for i in range(0, len(new_products), chunk_size):
                     chunk = new_products[i:i + chunk_size]
@@ -134,19 +137,16 @@ async def check_alza(seen_products):
         await browser.close()
 
 async def main():
-    logger.info("Starting Alza Pokémon Bot...")
-    logger.info(f"ntfy topic: https://ntfy.sh/{NTFY_TOPIC}")
+    logger.info("Starting Alza Pokémon Bot (Single Run)...")
     
     seen_products = load_seen_products()
     
-    while True:
-        try:
-            await check_alza(seen_products)
-        except Exception as e:
-            logger.error(f"Unexpected error in loop: {e}")
-        
-        logger.info(f"Waiting {CHECK_INTERVAL} seconds...")
-        await asyncio.sleep(CHECK_INTERVAL)
+    try:
+        await check_alza(seen_products)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+    
+    logger.info("Run complete.")
 
 if __name__ == "__main__":
     asyncio.run(main())
