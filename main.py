@@ -22,17 +22,14 @@ load_dotenv()
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "alza_pokemon_bot_97422555")
 ALZA_URL = os.getenv("ALZA_URL")
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
 SEEN_FILE = "seen_products.json"
 
 def load_seen_products():
-    """Load previously seen products from a JSON file."""
     if os.path.exists(SEEN_FILE):
         try:
             with open(SEEN_FILE, "r") as f:
                 content = f.read()
-                if not content:
-                    return set()
+                if not content: return set()
                 return set(json.loads(content))
         except Exception as e:
             logger.error(f"Error loading seen products: {e}")
@@ -40,7 +37,6 @@ def load_seen_products():
     return set()
 
 def save_seen_products(seen):
-    """Save seen products to a JSON file."""
     try:
         with open(SEEN_FILE, "w") as f:
             json.dump(list(seen), f)
@@ -48,7 +44,6 @@ def save_seen_products(seen):
         logger.error(f"Error saving seen products: {e}")
 
 def send_notification(message):
-    """Send a notification to the ntfy topic."""
     try:
         url = f"https://ntfy.sh/{NTFY_TOPIC}"
         headers = {
@@ -63,40 +58,71 @@ def send_notification(message):
         logger.error(f"Failed to send notification: {e}")
 
 async def check_alza(seen_products):
-    """Scrape Alza for products and notify if new ones are found."""
     if not ALZA_URL:
-        logger.error("ALZA_URL is not set! Please add it to GitHub Secrets.")
+        logger.error("ALZA_URL is not set!")
         return
 
     async with async_playwright() as p:
-        # Launch chromium
-        browser = await p.chromium.launch(headless=True)
+        # Launch chromium with some additional args to look less like a bot
+        browser = await p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox'
+        ])
         
-        # Use a realistic user agent and stealth
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={'width': 1920, 'height': 1080},
+            device_scale_factor=1,
+            has_touch=False,
+            is_mobile=False
         )
+        
         page = await context.new_page()
         
-        # Apply stealth
-        stealth = Stealth()
+        # Apply more aggressive stealth
+        stealth = Stealth(
+            vendor='Google Inc.',
+            renderer='Intel Iris OpenGL Engine',
+            nav_user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            nav_platform='Win32',
+            nav_vendor='Google Inc.'
+        )
         await stealth.apply_stealth_async(page)
 
-        logger.info(f"Checking Alza URL: {ALZA_URL}")
+        logger.info(f"Navigating to Alza...")
         try:
-            # Navigate to URL - using domcontentloaded is more reliable for sites with heavy tracking
-            await page.goto(ALZA_URL, wait_until="domcontentloaded", timeout=90000)
+            # First attempt
+            await page.goto(ALZA_URL, wait_until="domcontentloaded", timeout=60000)
             
-            # Wait for the specific filtering to be reflected in the URL or page state
-            # Alza often applies filters after load. We wait for the grid to stabilize.
-            await page.wait_for_timeout(10000) # Increased to 10 seconds for GitHub Actions latency
+            # Check for Cloudflare Challenge
+            for attempt in range(3):
+                content = await page.content()
+                if "Verify you are human" in content or "cf-challenge" in content or "cf-wrapper" in content:
+                    logger.info(f"Cloudflare challenge detected. Waiting... (Attempt {attempt+1}/3)")
+                    # Move mouse randomly to look human
+                    await page.mouse.move(100, 100)
+                    await asyncio.sleep(1)
+                    await page.mouse.move(200, 300)
+                    await asyncio.sleep(15) # Wait for auto-solve
+                else:
+                    break
+
+            # Check if still on challenge page
+            if "Verify you are human" in await page.content():
+                logger.warning("Still blocked by Cloudflare after waiting. Taking screenshot...")
+                await page.screenshot(path="error.png")
+                await browser.close()
+                return
+
+            # Wait for products
+            logger.info("Waiting for products to load...")
+            await asyncio.sleep(5) 
             
-            # Wait for the product grid to be visible
             try:
                 await page.wait_for_selector(".browsingitem", timeout=30000)
             except Exception:
-                logger.warning("Product selector '.browsingitem' not found within timeout. Page might be empty or blocked. Taking screenshot...")
+                logger.warning("Product grid not found. Page might be empty or blocked. Taking screenshot...")
                 await page.screenshot(path="error.png")
                 await browser.close()
                 return
@@ -105,7 +131,6 @@ async def check_alza(seen_products):
             logger.info(f"Found {len(items)} products.")
 
             new_products = []
-            
             for item in items:
                 title_elem = await item.query_selector("a.browsingitem-title")
                 price_elem = await item.query_selector(".price-box__price")
@@ -116,15 +141,12 @@ async def check_alza(seen_products):
                     url = "https://www.alza.sk" + href if href.startswith("/") else href
                     price = (await price_elem.inner_text()).strip() if price_elem else "N/A"
                     
-                    # Create a unique ID for the product (title + price to catch price drops too)
                     product_id = f"{title}_{price}"
-                    
                     if product_id not in seen_products:
                         new_products.append(f"📦 {title}\n💰 {price}\n🔗 {url}")
                         seen_products.add(product_id)
 
             if new_products:
-                # Send notifications in chunks
                 chunk_size = 5
                 for i in range(0, len(new_products), chunk_size):
                     chunk = new_products[i:i + chunk_size]
@@ -138,19 +160,17 @@ async def check_alza(seen_products):
 
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
+            await page.screenshot(path="error.png")
         
         await browser.close()
 
 async def main():
     logger.info("Starting Alza Pokémon Bot (Single Run)...")
-    
     seen_products = load_seen_products()
-    
     try:
         await check_alza(seen_products)
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-    
     logger.info("Run complete.")
 
 if __name__ == "__main__":
