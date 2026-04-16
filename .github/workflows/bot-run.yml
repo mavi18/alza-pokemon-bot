@@ -2,14 +2,14 @@ name: Run Alza Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Runs every 5 minutes
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   check-alza:
     runs-on: ubuntu-latest
     permissions:
-      contents: write     # Needed to commit seen_products.json back
+      contents: write
 
     steps:
       - name: Checkout code
@@ -20,10 +20,14 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          playwright install --with-deps firefox
 
       - name: Run bot
         env:
