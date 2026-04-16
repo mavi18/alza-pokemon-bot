@@ -1,0 +1,7 @@
+.env
+seen_products.json
+__pycache__/
+*.pyc
+.venv/
+env/
+error.png
